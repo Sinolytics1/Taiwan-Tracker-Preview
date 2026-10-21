@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taiwan Coercion Pressure Index</title>
+<!-- target path: src/taiwan/templates/dashboard_v4.html (copied to output/.../dashboard/v4.html by src/taiwan/dashboard.py)
+     v4 (2026-10-21): weight, threshold and scenario sandbox built on the v3 preview. Left: the index, recomputed in the
+     page, and the raw legs of the three outcome rows (C7-C9) with adjustable 0-point lines; right: domain and instrument
+     weights (total 100) with the monthly score matrix. Starting weights: domains A/B/C/D = 30/30/30/10, each domain's
+     share split over its rows in proportion to the saved weights and rounded to whole numbers (largest remainder).
+     A row's points scale linearly with its weight (saved points x new weight / saved weight). Outcome rows: the legs
+     and thresholds are parsed from the saved monthly details text; moving a 0-point line moves the full-score line by
+     the same amount, and the row is rescored in the page as weight x max over legs of the linear ramp (the C7
+     hold-until-confirmed rule is not applied). At the saved thresholds the saved scores are used.
+     Scenarios: scenarios.js (master scenarios/dashboard_scenarios.js) adds six months after the last scored month;
+     rows a scenario does not set decay (episodic, x0.6 a month, dropped below 0.25) or keep their last state.
+     Reads data.js (window.TCPI) and scenarios.js (window.TCPI_SCENARIOS). English only. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  /* theme tokens (same as v3) */
+  :root {
+    --bg: #ffffff; --ink: #1f2937; --ink-soft: #6b7280; --ink-faint: #9ca3af; --rule: #e5e7eb; --panel: #f8fafc;
+    --teal: #0f6e73; --teal-fill: rgba(15, 110, 115, 0.12); --navy: #1e3a5f; --scen-band: rgba(107, 114, 128, 0.10); --hl: rgba(234, 179, 8, 0.30);
+    --dom-A: #b5432f; --dom-B: #d08b1c; --dom-C: #2b7a4b; --dom-D: #6a4fb3; --dom-T: #9ca3af;
+    --font: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --gap: 16px; --radius: 4px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+  header, footer { max-width: 1680px; margin: 0 auto; padding: 0 var(--gap); }
+  main { max-width: 1680px; margin: 0 auto; padding: 0 var(--gap); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 28px; align-items: start; }
+  .left, .right { min-width: 0; }
+  header { padding-top: 28px; padding-bottom: 10px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .scen { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .scen select { font-family: var(--font); font-size: 13px; color: var(--ink); padding: 4px 8px; border: 1px solid var(--rule); border-radius: var(--radius); background: #fff; cursor: pointer; }
+  .scen select.on { border-color: var(--teal); color: var(--teal); font-weight: 600; }
+  section { margin: 0 0 26px; }
+  .sec-head { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--rule); padding: 8px 0; cursor: pointer; user-select: none; }
+  .sec-head h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
+  .sec-head .chev { width: 10px; height: 10px; border-right: 2px solid var(--ink-soft); border-bottom: 2px solid var(--ink-soft); transform: rotate(45deg); transition: transform .15s; margin-right: 4px; }
+  section.collapsed .chev { transform: rotate(-45deg); }
+  section.collapsed .sec-body { display: none; }
+  .sec-body { padding-top: 14px; }
+  .small { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+  /* 1. index */
+  .legend-dots { display: flex; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); margin-bottom: 6px; }
+  .legend-dots span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 4px; }
+  .chart-wrap { position: relative; height: 380px; }
+  .chart-wrap canvas { width: 100% !important; }
+  .tip { position: absolute; width: 320px; background: #fff; border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: 0 4px 16px rgba(0,0,0,.08); padding: 10px 12px; font-size: 12.5px; pointer-events: auto; display: none; z-index: 5; }
+  .tip.pinned { border-color: var(--teal); }
+  .tip h4 { margin: 0 0 6px; font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .tip .ev { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; }
+  .tip .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
+  .tip .pts { color: var(--teal); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+  .tip .day { color: var(--ink-soft); font-family: var(--mono); font-size: 11px; white-space: nowrap; margin-left: auto; padding-left: 6px; }
+  .tip .none { color: var(--ink-soft); font-style: italic; }
+  #hover-panel { display: none; margin-top: 10px; border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 12px; }
+  .takeaways { margin-top: 14px; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 14px; }
+  .takeaways h3 { margin: 0 0 6px; font-size: 12px; font-family: var(--mono); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
+  .takeaways ul { margin: 0; padding-left: 18px; }
+  /* 2. outcome indicators */
+  .oc { margin-bottom: 22px; }
+  .oc h3 { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .oc h3 .small { font-weight: 400; margin-left: 6px; }
+  /* scenario highlight: rows and outcome legs the selected scenario sets */
+  .oc h3 .t, .oc-sub span, .wrow .lab span { border-radius: 2px; padding: 0 2px; margin: 0 -2px; }
+  .oc h3.hl .t, .oc-sub.hl span, .wrow.hl .lab span { background: var(--hl); }
+  .oc-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .oc-sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); margin-bottom: 4px; min-height: 30px; }
+  .oc-wrap { position: relative; height: 170px; }
+  .thr { display: grid; grid-template-columns: auto minmax(0, 1fr) 56px 14px; gap: 6px; align-items: center; font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); margin-bottom: 4px; }
+  .thr input[type=range] { width: 100%; accent-color: var(--teal); margin: 0; }
+  .thr input[type=number], .wrow input[type=number] { width: 100%; font-family: var(--mono); font-size: 12px; padding: 2px 4px; border: 1px solid var(--rule); border-radius: 3px; text-align: right; -moz-appearance: textfield; appearance: textfield; }
+  .thr input[type=number]::-webkit-inner-spin-button, .thr input[type=number]::-webkit-outer-spin-button,
+  .wrow input[type=number]::-webkit-inner-spin-button, .wrow input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .thr.changed input[type=number], .wrow.changed input[type=number] { border-color: var(--teal); color: var(--teal); font-weight: 600; }
+  /* 3. weights and matrix */
+  .w-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .w-total { font-family: var(--mono); font-size: 12px; flex: 1; }
+  .w-total b { font-weight: 600; }
+  .btn { border: 1px solid var(--rule); background: #fff; border-radius: var(--radius); padding: 3px 12px; font-size: 12px; cursor: pointer; font-family: var(--font); color: var(--ink); }
+  .btn:hover { border-color: var(--ink-faint); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .wrow { display: grid; grid-template-columns: 22px minmax(0, 210px) minmax(0, 130px) 64px 52px minmax(0, 1fr); gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #f1f5f9; }
+  .wrow .code { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+  .wrow .lab { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+  .wrow .src { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+  .wrow.dom { background: var(--panel); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin-top: 10px; padding: 5px 0; }
+  .wrow.dom .code { font-weight: 700; font-size: 12px; text-align: center; }
+  .wrow.dom .lab { font-weight: 600; }
+  .wrow input[type=range] { width: 100%; accent-color: var(--teal); margin: 0; }
+  .strip { display: flex; gap: 1px; height: 14px; }
+  .strip i { flex: 1 1 0; min-width: 0; background: var(--c); font-style: normal; }
+  .strip i.nd { background: repeating-linear-gradient(45deg, #e5e7eb 0 2px, #fff 2px 4px); }
+  .wrow.mhead { border-bottom: none; padding-bottom: 0; }
+  .mhead .strip i { background: none; position: relative; }
+  .mhead .strip i.sc { background: var(--scen-band); }
+  .mhead .strip span { position: absolute; left: 0; bottom: 0; font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); }
+  footer { border-top: 1px solid var(--rule); margin-top: 20px; padding: 14px var(--gap) 30px; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); display: flex; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--teal); }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) { .chart-wrap { height: 300px; } .oc-row { grid-template-columns: 1fr; } .wrow { grid-template-columns: 22px minmax(0, 1fr) 64px 52px; } .wrow .src, .mhead > span:nth-child(3) { display: none; } .wrow .strip { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Taiwan Coercion Pressure Index</h1>
+  <label class="scen" id="scen-box" hidden>Scenario <select id="scen"></select></label>
+</header>
+<main>
+  <div class="left">
+    <section id="s-index">
+      <div class="sec-head"><span class="chev"></span><h2>1 · Index</h2><span class="small" id="index-latest"></span></div>
+      <div class="sec-body">
+        <div class="legend-dots" id="legend-dots"></div>
+        <div class="chart-wrap"><canvas id="c-index"></canvas><div class="tip" id="tip"></div></div>
+        <div id="hover-panel"></div>
+        <div class="takeaways" id="takeaways-box" hidden><h3>Key takeaways</h3><div id="takeaways"></div></div>
+      </div>
+    </section>
+    <section id="s-outcome">
+      <div class="sec-head"><span class="chev"></span><h2>2 · Outcome indicators</h2></div>
+      <div class="sec-body" id="outcome"></div>
+    </section>
+  </div>
+  <aside class="right">
+    <section id="s-instruments">
+      <div class="sec-head"><span class="chev"></span><h2>3 · Instruments</h2></div>
+      <div class="sec-body">
+        <div class="w-top">
+          <span class="w-total" id="w-total"></span>
+          <button class="btn" id="w-undo">Undo</button>
+          <button class="btn" id="w-reset">Reset</button>
+        </div>
+        <div id="weights"></div>
+      </div>
+    </section>
+  </aside>
+</main>
+<footer>
+  <span id="foot-version"></span>
+  <span id="foot-built"></span>
+</footer>
+<script src="data.js"></script>
+<script src="scenarios.js"></script>
+<script>
+(function () {
+  const D = window.TCPI, V = D.versions[D.versions.length - 1];
+  const SCENARIOS = Array.isArray(window.TCPI_SCENARIOS) ? window.TCPI_SCENARIOS : [];
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const DOM = { A: css('--dom-A'), B: css('--dom-B'), C: css('--dom-C'), D: css('--dom-D'), '': css('--dom-T') };
+  const DNAME = { A: 'Military', B: 'Law enforcement', C: 'Economic', D: 'Legal and political', '': 'Trigger' };
+  const DLIST = ['A', 'B', 'C', 'D'], DORDER = ['A', 'B', 'C', 'D', ''];
+  const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mname = m => MN[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4);
+  const ymAdd = (m, k) => { const t = +m.slice(0, 4) * 12 + (+m.slice(5, 7) - 1) + k; return Math.floor(t / 12) + '-' + String(t % 12 + 1).padStart(2, '0'); };
+  const f2 = v => (Math.round(v * 100) / 100).toFixed(2);
+  const fw = v => Math.abs(v - Math.round(v)) < 0.005 ? String(Math.round(v)) : v.toFixed(2);
+  const fz = v => String(+v.toFixed(2));
+  const clamp01 = v => Math.max(0, Math.min(1, +v || 0));
+  const BASE_MONTHS = V.months, NB = BASE_MONTHS.length;
+  let months = BASE_MONTHS.slice(), N = NB, LABELS = months.map(mname), SCN = null;
+  const dname = d => (V.domain_meta[d] || {}).name || DNAME[d];
+  const tickFont = { family: css('--mono'), size: 10 };
+  $('foot-version').textContent = 'version "' + V.label + '" · saved ' + (V.created_at || '').slice(0, 10);
+  $('foot-built').textContent = 'built ' + (D.built_at || '').replace('T', ' ').slice(0, 16) + ' UTC';
+  document.querySelectorAll('.sec-head').forEach(h => h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed')));
+
+  // ---- weights model ------------------------------------------------------------------------------------------------
+  // index = normalise_to x sum(points) / total weight; each row's points are linear in its weight, so saved points /
+  // saved weight is the row's monthly ramp (0-1).
+  const INS = V.instruments, KEYS = INS.map(r => r.key);
+  const TOTAL = 100, SAVED_TOTAL = V.scope_max_raw || INS.reduce((s, r) => s + r.weight, 0), NORM = V.normalise_to || 100;
+  const W0 = {}, SW = {}, TYPE = {}, SAVED_RAMP = {}, RAMP_BASE = {}, RAMP = {}, DOMOF = {}, codes = {}, keyOf = {}, cnt = {};
+  INS.forEach(r => {
+    SW[r.key] = r.weight; DOMOF[r.key] = r.domain; TYPE[r.key] = r.type;
+    SAVED_RAMP[r.key] = (V.points[r.key] || []).map(p => r.weight ? p / r.weight : 0);
+    cnt[r.domain] = (cnt[r.domain] || 0) + 1; codes[r.key] = r.domain + cnt[r.domain]; keyOf[codes[r.key]] = r.key;
+  });
+  // starting weights: domain totals below, split over the domain's rows in proportion to the saved weights and rounded
+  // to whole numbers by largest remainder (ties in registry order)
+  const DSTART = { A: 30, B: 30, C: 30, D: 10 };
+  DLIST.forEach(d => {
+    const ks = KEYS.filter(k => DOMOF[k] === d), sw = ks.reduce((s, k) => s + SW[k], 0);
+    const ex = ks.map(k => SW[k] * DSTART[d] / sw);
+    ks.forEach((k, i) => { W0[k] = Math.floor(ex[i]); });
+    const left = DSTART[d] - ks.reduce((s, k) => s + W0[k], 0);
+    ks.map((k, i) => [k, ex[i] - W0[k], i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).slice(0, left).forEach(([k]) => { W0[k] += 1; });
+  });
+  let W = Object.assign({}, W0);
+  const inDom = d => KEYS.filter(k => DOMOF[k] === d);
+  const domSum = (d, w) => inDom(d).reduce((s, k) => s + (w || W)[k], 0);
+
+  // ---- outcome rows: legs and adjustable 0-point lines ----------------------------------------------------------------
+  // values and thresholds come from the saved monthly details text; a carried-forward month is scored but not drawn
+  function parseLeg(key, leg) {
+    let zero = null, full = null;
+    const val = [], carried = [];
+    (V.details[key] || []).forEach(t => {
+      t = t || ''; carried.push(/^Carried forward/.test(t));
+      if (leg) {
+        const m = t.match(new RegExp(leg + ' ([+-]?[\\d.]+) \\(([^)]*)\\)'));
+        if (m) { const th = m[2].match(/0 at ([+-]?[\d.]+), full at ([+-]?[\d.]+)/); if (th) { zero = +th[1]; full = +th[2]; } }
+        val.push(m ? +m[1] : null); return;
+      }
+      const th = t.match(/0 at >= ([\d.]+)%, full at <= ([\d.]+)%/); if (th) { zero = +th[1]; full = +th[2]; }
+      const m = t.match(/Taiwan ([\d.]+)%/); val.push(m ? +m[1] : null);
+    });
+    return { baseVal: val, baseDisp: val.map((v, i) => carried[i] ? null : v), zero, full };
+  }
+  const PANELS = [
+    { row: 'C7', title: 'Blockade alarm', key: 'port_call_divergence', src: 'IMF PortWatch', charts: [
+      { id: 'oc-c7a', sub: 'Leg 1: Strait traffic skipping Taiwan?', unit: '', legs: [{ leg: 'divergence anomaly', label: 'Divergence anomaly', min: -5, max: 25, step: 0.5 }] },
+      { id: 'oc-c7b', sub: 'Leg 2: Fewer port calls than a year ago?', unit: '%', legs: [{ leg: 'calls eight ports', label: 'Eight ports', min: -40, max: 0, step: 0.5 }, { leg: 'calls kaohsiung', label: 'Kaohsiung', color: css('--navy'), min: -40, max: 0, step: 0.5 }] } ] },
+    { row: 'C8', title: 'Trade bite', key: 'cross_strait_trade_shock', src: 'China customs (GACC)', charts: [
+      { id: 'oc-c8a', sub: 'Leg A: Targeted ECFA goods losing share?', unit: '%', legs: [{ leg: 'targeted loss', label: 'Targeted loss', min: 0, max: 20, step: 0.5 }] },
+      { id: 'oc-c8b', sub: 'Leg B: Broader trade share weakening?', unit: '%', legs: [{ leg: 'broad anomaly', label: 'Broad anomaly', min: -60, max: 0, step: 0.5 }] } ] },
+    { row: 'C9', title: 'Rare-earth squeeze', key: 'ree_magnet_share_tw', src: 'China customs (GACC)', charts: [
+      { id: 'oc-c9', sub: 'Leg 1: Rare-earth magnet shipments to Taiwan shrinking?', unit: '%', legs: [{ leg: null, label: 'Taiwan share', min: 0.6, max: 3.2, step: 0.05 }] } ] },
+  ];
+  const LEGS = [];
+  PANELS.forEach(p => p.charts.forEach(c => c.legs.forEach(l => {
+    Object.assign(l, parseLeg(p.key, l.leg), { key: p.key, name: l.leg || 'magnet share', unit: c.unit, color: l.color || DOM.C, li: LEGS.length });
+    l.width = l.full - l.zero; l.z = l.zero; l.val = l.baseVal; l.disp = l.baseDisp; LEGS.push(l);
+  })));
+  const OKEYS = [...new Set(LEGS.map(l => l.key))];
+  const zDefault = () => LEGS.every(l => Math.abs(l.z - l.zero) < 1e-9);
+
+  // ---- scenario months --------------------------------------------------------------------------------------------
+  // rows the scenario sets take its value (share of weight); other rows: episodic decay x0.6 a month and drop below 0.25
+  // of the episode peak (config scoring.episodic), every other type keeps its last state; outcome legs keep their last
+  // value unless the scenario gives one
+  const EV_BASE = (D.event_list || []).filter(e => e.tier < 3);
+  let EV = EV_BASE, SKEYS = new Set(), SLEGS = new Set();   // rows and legs the selected scenario sets (highlighted)
+  function buildSeries() {
+    const sm = SCN ? SCN.months : [], lastBase = BASE_MONTHS[NB - 1];
+    months = BASE_MONTHS.concat(sm.map((_, j) => ymAdd(lastBase, j + 1))); N = months.length; LABELS = months.map(mname);
+    KEYS.forEach(k => {
+      const base = SAVED_RAMP[k], arr = base.slice();
+      if (TYPE[k] === 'episodic') {
+        let i = NB - 1; while (i > 0 && base[i] > 0 && base[i - 1] > base[i] + 1e-9) i--;   // start of the running episode
+        let peak = base[NB - 1] > 0 ? base[i] : 0, age = base[NB - 1] > 0 ? NB - 1 - i : 0;
+        sm.forEach(s => {
+          const v = (s.set || {})[k], running = peak > 0 && Math.pow(0.6, age + 1) >= 0.25 ? peak * Math.pow(0.6, age + 1) : 0;
+          if (v !== undefined && clamp01(v) >= running) { peak = clamp01(v); age = 0; arr.push(peak); }
+          else { age++; arr.push(running); if (!running) peak = 0; }
+        });
+      } else sm.forEach(s => { const v = (s.set || {})[k]; arr.push(v !== undefined ? clamp01(v) : arr[arr.length - 1]); });
+      RAMP_BASE[k] = arr;
+    });
+    LEGS.forEach(l => {
+      let lastV = null; l.baseVal.forEach(v => { if (v !== null) lastV = v; });
+      const ext = sm.map(s => { const v = (s.legs || {})[l.name]; if (v !== undefined && v !== null && isFinite(+v)) lastV = +v; return lastV; });
+      l.val = l.baseVal.concat(ext); l.disp = l.baseDisp.concat(ext);
+    });
+    EV = EV_BASE.concat(...sm.map((s, j) => (s.events || []).map((e, n) => ({ id: `SCN-${SCN.id}-${j}-${n}`, month: months[NB + j], day: '',
+      domain: e.domain || '', row: e.row || '', tier: 2, points: 0, headline: e.headline || '' }))));
+    SKEYS = new Set(); SLEGS = new Set();
+    sm.forEach(s => {
+      Object.keys(s.set || {}).forEach(k => SKEYS.add(k));
+      Object.keys(s.legs || {}).forEach(n => { SLEGS.add(n); LEGS.forEach(l => { if (l.name === n) SKEYS.add(l.key); }); });
+    });
+  }
+  // row ramp = max over its legs of (value - 0 line) / (full line - 0 line), clipped to 0-1; saved scores at saved lines
+  function applyThresholds() {
+    KEYS.forEach(k => { if (!OKEYS.includes(k)) RAMP[k] = RAMP_BASE[k]; });
+    OKEYS.forEach(k => {
+      const legs = LEGS.filter(l => l.key === k), def = legs.every(l => Math.abs(l.z - l.zero) < 1e-9);
+      RAMP[k] = months.map((m, i) => def && i < NB ? SAVED_RAMP[k][i]
+        : legs.reduce((r, l) => { const v = l.val[i]; return v === null || v === undefined ? r : Math.max(r, Math.min(1, Math.max(0, (v - l.z) / l.width))); }, 0));
+    });
+  }
+
+  // ---- state, moves and undo ----------------------------------------------------------------------------------------
+  const sameW = (a, b) => KEYS.every(k => Math.abs(a[k] - b[k]) < 0.005);
+  const isDefault = () => sameW(W, W0) && zDefault();
+  function compute() {
+    const raw = new Array(N).fill(0), dom = {};
+    DLIST.forEach(d => { dom[d] = new Array(N).fill(0); });
+    KEYS.forEach(k => { const r = RAMP[k], w = W[k], d = dom[DOMOF[k]]; for (let i = 0; i < N; i++) { const p = r[i] * w; raw[i] += p; d[i] += p; } });
+    return { index: raw.map(v => NORM * v / TOTAL), dom };
+  }
+  // the index at the starting weights and the saved 0-point lines, on the same months (grey dashed line)
+  function baselineIndex() {
+    const w = W, z = LEGS.map(l => l.z);
+    W = W0; LEGS.forEach(l => { l.z = l.zero; }); applyThresholds();
+    const b = compute().index;
+    W = w; LEGS.forEach((l, i) => { l.z = z[i]; }); applyThresholds();
+    return b;
+  }
+  // a move (one drag or one typed value) is one undo step; a weight move rescales the other weights in proportion to
+  // the weights when the move began
+  let snap = null; const hist = [];
+  function begin() { if (!snap) { snap = { w: Object.assign({}, W), z: LEGS.map(l => l.z) }; hist.push(snap); if (hist.length > 200) hist.shift(); } }
+  function endMove() { if (snap && hist[hist.length - 1] === snap && sameW(snap.w, W) && LEGS.every((l, i) => l.z === snap.z[i])) hist.pop(); snap = null; schedule(); }
+  function spread(keys, total, base) {
+    const b = keys.reduce((s, j) => s + base[j], 0);
+    keys.forEach(j => { W[j] = b > 1e-9 ? base[j] * total / b : total / keys.length; });
+  }
+  const clamp = v => Math.max(0, Math.min(TOTAL, v));
+  function setWeight(k, v) {
+    if (!isFinite(v)) return; begin(); v = clamp(v);
+    spread(KEYS.filter(j => j !== k), TOTAL - v, snap.w); W[k] = v; schedule();
+  }
+  function setDomain(d, v) {
+    if (!isFinite(v)) return; begin(); v = clamp(v);
+    spread(inDom(d), v, snap.w); spread(KEYS.filter(j => DOMOF[j] !== d), TOTAL - v, snap.w); schedule();
+  }
+  function setZero(li, v) {
+    if (!isFinite(v)) return; begin(); const l = LEGS[li];
+    l.z = Math.max(l.min, Math.min(l.max, v)); applyThresholds(); schedule();
+  }
+  function restore(s) { W = Object.assign({}, s.w); LEGS.forEach((l, i) => { l.z = s.z[i]; }); applyThresholds(); }
+  function undo() { if (!hist.length) return; snap = null; restore(hist.pop()); refresh(); }
+  function reset() { snap = null; hist.length = 0; restore({ w: W0, z: LEGS.map(l => l.zero) }); refresh(); }
+  // scenario, weights and 0-point lines in the address (#s=...&w=...&z=...) so a setting can be bookmarked or sent
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    SCN = SCENARIOS.find(s => s.id === p.get('s')) || null;
+    const w = (p.get('w') || '').split(',').map(Number);
+    if (w.length === KEYS.length && w.every(x => isFinite(x) && x >= 0)) {
+      const s = w.reduce((a, b) => a + b, 0); if (s > 0) KEYS.forEach((k, i) => { W[k] = w[i] * TOTAL / s; });
+    }
+    const z = (p.get('z') || '').split(',').map(Number);
+    if (z.length === LEGS.length && z.every(isFinite)) LEGS.forEach((l, i) => { l.z = Math.max(l.min, Math.min(l.max, z[i])); });
+  }
+  function writeHash() {
+    const h = [];
+    if (SCN) h.push('s=' + SCN.id);
+    if (!sameW(W, W0)) h.push('w=' + KEYS.map(k => +W[k].toFixed(3)).join(','));
+    if (!zDefault()) h.push('z=' + LEGS.map(l => fz(l.z)).join(','));
+    try { history.replaceState(null, '', h.length ? '#' + h.join('&') : location.pathname + location.search); } catch (e) {}
+  }
+  readHash();
+  buildSeries();
+  applyThresholds();
+  let BASELINE = baselineIndex();
+
+  // ---- events per month (tier 1-2: scored changes and chart labels; scenario events) ---------------------------------
+  const evPts = e => { const k = keyOf[e.row]; return k && SW[k] ? e.points / SW[k] * W[k] : e.points * TOTAL / SAVED_TOTAL; };
+  const monthEvents = m => EV.filter(e => e.month === m)
+    .sort((a, b) => DORDER.indexOf(a.domain) - DORDER.indexOf(b.domain) || a.tier - b.tier || (a.date < b.date ? -1 : 1));
+  $('legend-dots').innerHTML = DLIST.map(d => `<span style="--c:${DOM[d]}">${DNAME[d]}</span>`).join('');
+
+  // shaded band over the scenario months, on the index and outcome charts
+  const bandPlugin = { id: 'scenBand', beforeDatasetsDraw(ch) {
+    if (N <= NB) return;
+    const { ctx, chartArea: a, scales: { x } } = ch, x0 = (x.getPixelForValue(NB - 1) + x.getPixelForValue(NB)) / 2;
+    ctx.save(); ctx.fillStyle = css('--scen-band'); ctx.fillRect(x0, a.top, a.right - x0, a.bottom - a.top);
+    ctx.fillStyle = css('--ink-soft'); ctx.font = '10px ' + css('--mono'); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    if (a.right - x0 > 60) ctx.fillText('scenario', x0 + 3, a.top + 3);
+    ctx.restore();
+  } };
+  const scenDash = c => c.p1DataIndex >= NB ? [4, 3] : undefined;
+
+  // ---- 1. index chart -------------------------------------------------------------------------------------------------
+  let cur = compute();
+  let hoverIdx = null, pinned = false, touch = false;
+  // hover layer only: dashed guide, the event-dot stack from the x axis up, and the dot on the line
+  const hoverPlugin = { id: 'hoverLayer', afterDatasetsDraw(ch) {
+    if (hoverIdx === null || hoverIdx >= N) return;
+    const { ctx, chartArea: a, scales: { x, y } } = ch, px = x.getPixelForValue(hoverIdx);
+    ctx.save();
+    ctx.strokeStyle = css('--ink-faint'); ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke(); ctx.setLineDash([]);
+    const evs = monthEvents(months[hoverIdx]), r = 4.5;
+    const step = Math.min(11, evs.length > 1 ? (a.bottom - a.top - 2 * r - 6) / (evs.length - 1) : 11);
+    evs.forEach((e, k) => {
+      ctx.beginPath(); ctx.arc(px, a.bottom - r - 3 - k * step, r, 0, Math.PI * 2);
+      ctx.fillStyle = DOM[e.domain]; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+    });
+    const py = y.getPixelForValue(cur.index[hoverIdx]);
+    ctx.fillStyle = css('--teal'); ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  } };
+  function tipHtml(i) {
+    const m = months[i], I = cur.index, d = i ? (I[i] - I[i - 1]) : 0;
+    const hdr = `${mname(m)} · ${I[i].toFixed(1)}${i ? ` (${d >= 0 ? '+' : ''}${d.toFixed(1)} vs ${MN[+months[i - 1].slice(5, 7) - 1]})` : ''}${i >= NB ? ' · scenario' : ''}`;
+    const evs = monthEvents(m).slice().reverse();   // top of the dot stack first
+    const body = evs.length ? evs.map(x => { const p = evPts(x);
+      return `<div class="ev"><span class="dot" style="background:${DOM[x.domain]}"></span><span>${x.headline}${p > 0 ? ` <span class="pts">+${f2(p)} ${x.row}</span>` : ''}</span><span class="day">${x.day}</span></div>`; }).join('')
+      : '<div class="none">No scored events this month</div>';
+    return `<h4>${hdr}</h4>${body}`;
+  }
+  function showTip(i) {
+    hoverIdx = i; chart.draw();
+    const html = tipHtml(i);
+    if (touch) { $('tip').style.display = 'none'; $('hover-panel').style.display = 'block'; $('hover-panel').innerHTML = html; return; }
+    const tip = $('tip'), w = tip.parentElement.clientWidth, px = chart.scales.x.getPixelForValue(i);
+    tip.innerHTML = html; tip.style.display = 'block';
+    tip.style.left = (px + 14 + 320 > w - 8 ? Math.max(4, px - 14 - 320) : px + 14) + 'px';
+    tip.style.top = (chart.chartArea.top + 6) + 'px';
+  }
+  function hideTip() { if (pinned) return; hoverIdx = null; $('tip').style.display = 'none'; chart.draw(); }
+  const chart = new Chart($('c-index'), {
+    type: 'line',
+    data: { labels: LABELS, datasets: [
+      { data: cur.index, borderColor: css('--teal'), backgroundColor: css('--teal-fill'), fill: true, borderWidth: 2, pointRadius: 0, pointHitRadius: 12, tension: 0.2,
+        segment: { borderDash: c => (c.p1DataIndex >= NB || V.provisional[c.p1DataIndex]) ? [4, 3] : undefined } },
+      { data: BASELINE, borderColor: css('--ink-faint'), borderDash: [4, 3], borderWidth: 1.2, fill: false, pointRadius: 0, pointHitRadius: 0, tension: 0.2, hidden: true } ] },
+    options: { maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+      scales: { y: { min: 0, max: 100, grid: { color: '#f1f5f9' }, ticks: { font: tickFont } },
+                x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12, font: tickFont } } },
+      plugins: { legend: { display: false }, tooltip: { enabled: false, external: ctx => { if (pinned) return; const t = ctx.tooltip; if (!t || t.opacity === 0 || !t.dataPoints || !t.dataPoints.length) { hideTip(); return; } showTip(t.dataPoints[0].dataIndex); } } },
+      onClick: (e, els) => { if (els.length) { if (pinned && hoverIdx === els[0].index) { pinned = false; $('tip').classList.remove('pinned'); hideTip(); } else { pinned = true; showTip(els[0].index); $('tip').classList.add('pinned'); } } } },
+    plugins: [bandPlugin, hoverPlugin],
+  });
+  $('c-index').addEventListener('touchstart', () => { touch = true; }, { passive: true });
+  $('c-index').addEventListener('mouseleave', hideTip);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { pinned = false; $('tip').classList.remove('pinned'); hideTip(); } });
+  const tk = (D.takeaways || '').split('\n').filter(l => /^\s*[-*]\s+/.test(l)).slice(0, 3).map(l => l.replace(/^\s*[-*]\s+/, ''));
+  if (tk.length) { $('takeaways-box').hidden = false; $('takeaways').innerHTML = '<ul>' + tk.map(l => `<li>${l}</li>`).join('') + '</ul>'; }
+
+  // ---- 2. outcome indicators: raw legs, 0-point line (solid) and full-score line (dashed) ------------------------------
+  let oh = '';
+  PANELS.forEach(p => {
+    oh += `<div class="oc"><h3 data-k="${p.key}"><span class="t">${p.row} · ${p.title}</span><span class="small">${p.src}</span></h3><div class="oc-row">`;
+    p.charts.forEach(c => {
+      oh += `<div><div class="oc-sub" data-legs="${c.legs.map(l => l.name).join('|')}"><span>${c.sub}</span></div>`;
+      c.legs.forEach(l => {
+        oh += `<div class="thr" data-l="${l.li}"><span>${c.legs.length > 1 ? l.label + ' · ' : ''}0 pts at</span>
+          <input type="range" min="${l.min}" max="${l.max}" step="${l.step}" aria-label="${l.label} 0-point line">
+          <input type="number" min="${l.min}" max="${l.max}" step="${l.step}" aria-label="${l.label} 0-point line value"><span>${c.unit}</span></div>`;
+      });
+      oh += `<div class="oc-wrap"><canvas id="${c.id}"></canvas></div></div>`;
+    });
+    oh += '</div></div>';
+  });
+  $('outcome').innerHTML = oh;
+  const thresholdPlugin = lines => ({ id: 'thresholds', afterDatasetsDraw(ch) {
+    const { ctx, chartArea: a, scales: { y } } = ch; ctx.save(); ctx.font = '10px ' + css('--mono');
+    lines.forEach(l => {
+      const py = y.getPixelForValue(l.v); if (py < a.top - 1 || py > a.bottom + 1) return;
+      ctx.strokeStyle = l.color; ctx.fillStyle = l.color; ctx.lineWidth = 1.2; ctx.setLineDash(l.full ? [4, 3] : []);
+      ctx.beginPath(); ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); ctx.stroke();
+      ctx.textAlign = l.left ? 'left' : 'right'; ctx.textBaseline = l.below ? 'top' : 'bottom';
+      ctx.fillText(l.text, l.left ? a.left + 2 : a.right - 2, py + (l.below ? 2 : -2));
+    });
+    ctx.restore();
+  } });
+  const OCH = [];
+  PANELS.forEach(p => p.charts.forEach(c => {
+    const lines = [];
+    const ch = new Chart($(c.id), { type: 'line',
+      data: { labels: LABELS, datasets: c.legs.map(l => ({ label: l.label, data: l.disp, borderColor: l.color, backgroundColor: l.color, borderWidth: 1.6, pointRadius: 0, pointHitRadius: 8, tension: 0.2, spanGaps: false, segment: { borderDash: scenDash } })) },
+      options: { maintainAspectRatio: false, animation: false, interaction: { mode: 'index', intersect: false },
+        scales: { y: { grid: { color: '#f1f5f9' }, ticks: { font: tickFont, maxTicksLimit: 6 } },
+                  x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 6, font: tickFont } } },
+        plugins: { legend: { display: c.legs.length > 1, position: 'bottom', labels: { boxWidth: 10, font: { size: 10.5 } } },
+          tooltip: { callbacks: { label: t => ` ${t.dataset.label}: ${t.parsed.y}${c.unit}`, footer: items => items.length ? `${p.row} score: ${f2(RAMP[p.key][items[0].dataIndex] * W[p.key])} of ${fw(W[p.key])}` : '' } } } },
+      plugins: [bandPlugin, thresholdPlugin(lines)] });
+    OCH.push({ ch, c, lines });
+  }));
+  function updateOutcome() {
+    OCH.forEach(({ ch, c, lines }) => {
+      ch.data.labels = LABELS; c.legs.forEach((l, j) => { ch.data.datasets[j].data = l.disp; });
+      lines.length = 0; let lo = Infinity, hi = -Infinity;
+      c.legs.forEach((l, si) => {
+        const tag = c.legs.length > 1 ? l.label + ' ' : '', f = l.z + l.width, down = l.width < 0;
+        lines.push({ v: l.z, color: l.color, text: `${tag}0 pts at ${fz(l.z)}${c.unit}`, below: down, left: si > 0 });
+        lines.push({ v: f, color: l.color, text: `${tag}full at ${fz(f)}${c.unit}`, below: down, left: si > 0, full: true });
+        l.disp.forEach(v => { if (v !== null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+        lo = Math.min(lo, l.z, f); hi = Math.max(hi, l.z, f);
+      });
+      const pad = (hi - lo) * 0.08 || 1;
+      ch.options.scales.y.suggestedMin = lo - pad; ch.options.scales.y.suggestedMax = hi + pad; ch.update('none');
+    });
+    document.querySelectorAll('.thr').forEach(el => {
+      const l = LEGS[+el.dataset.l], [rng, num] = el.querySelectorAll('input');
+      rng.value = l.z; if (document.activeElement !== num) num.value = fz(l.z);
+      el.classList.toggle('changed', Math.abs(l.z - l.zero) > 1e-9);
+    });
+  }
+
+  // ---- 3. weights and monthly matrix (shade = points / weight) ----------------------------------------------------------
+  // short data-source labels; the full source text from the registry is on hover
+  const SRC = { adiz_sustained: 'MND via ChinaPower', median_line_crossings: 'MND via ChinaPower', named_encircling_exercise: 'PLA Eastern Theater', declared_closure_zones: 'MSA / CAAC notices',
+    pla_east_of_taiwan: 'Japan JSO, Taiwan MND', overflight_taiwan_proper: 'Taiwan MND', ccg_kinmen_matsu_patrols: 'Taiwan CGA', ccg_boarding_inspection: 'CGA, MND, CCG', ccg_contiguous_zone: 'Taiwan CGA',
+    ccg_east_of_taiwan: 'China Coast Guard', unilateral_air_routes: 'CAAC', undersea_cable_interference: 'CGA, prosecutors', trade_barrier_finding: 'MOFCOM', ecfa_suspension: 'Tariff Commission',
+    agri_fishery_bans: 'GACC, MOFCOM', targeted_measures_tw_firms: 'MOFCOM', tourism_restrictions: 'Culture and Tourism', sanctions_arms_suppliers: 'MFA, MOFCOM', port_call_divergence: 'IMF PortWatch',
+    cross_strait_trade_shock: 'China customs (GACC)', ree_magnet_share_tw: 'China customs (GACC)', separatist_criminal_regime: 'TAO, SPC / SPP', extraterritorial_legal_reach: 'Public security, courts',
+    bounties_reporting_channels: 'TAO, public security', diplomatic_isolation_actions: 'MFA, Taiwan MOFA' };
+  const q = s => (s || '').replace(/"/g, '&quot;');
+  let wh = `<div class="wrow mhead"><span></span><span></span><span></span><span></span><span></span><div class="strip"></div></div>`;
+  DLIST.forEach(d => {
+    wh += `<div class="wrow dom" data-d="${d}"><span class="code" style="color:${DOM[d]}">${d}</span><div class="lab" title="${dname(d)}">${dname(d)}</div><span></span>
+      <input type="range" min="0" max="${TOTAL}" step="0.1" aria-label="${dname(d)} weight"><input type="number" min="0" max="${TOTAL}" step="0.01" aria-label="${dname(d)} weight value">
+      <div class="strip" style="--c:${DOM[d]}"></div></div>`;
+    INS.filter(r => r.domain === d).forEach(r => {
+      const k = r.key;
+      wh += `<div class="wrow" data-k="${k}"><span class="code">${codes[k]}</span><div class="lab" title="${q(r.label)}&#10;${q(r.rule)}"><span>${r.label}</span></div><span class="src" title="${q(r.source)}">${SRC[k] || r.source_type || ''}</span>
+        <input type="range" min="0" max="25" step="0.1" aria-label="${q(r.label)} weight"><input type="number" min="0" max="${TOTAL}" step="0.01" aria-label="${q(r.label)} weight value">
+        <div class="strip" style="--c:${DOM[d]}"></div></div>`;
+    });
+  });
+  $('weights').innerHTML = wh;
+  // matrix cells for the current months (rebuilt when the scenario changes); shading is set in refresh()
+  function renderStrips() {
+    $('weights').querySelector('.mhead .strip').innerHTML = months.map((m, i) => `<i class="${i >= NB ? 'sc' : ''}">${m.endsWith('-01') ? `<span>${m.slice(0, 4)}</span>` : ''}</i>`).join('');
+    $('weights').querySelectorAll('.wrow[data-d] .strip').forEach(s => { s.innerHTML = months.map((m, i) => `<i data-i="${i}"></i>`).join(''); });
+    $('weights').querySelectorAll('.wrow[data-k] .strip').forEach(s => {
+      const fl = V.flags[s.closest('.wrow').dataset.k] || [];
+      s.innerHTML = months.map((m, i) => `<i data-i="${i}"${i < NB && /no_data/.test(fl[i] || '') ? ' class="nd"' : ''}></i>`).join('');
+    });
+  }
+  renderStrips();
+  function wire(el, set) {
+    const [rng, num] = el.querySelectorAll('input');
+    rng.addEventListener('input', () => set(+rng.value));
+    rng.addEventListener('change', endMove);
+    num.addEventListener('input', () => { if (num.value !== '' && isFinite(+num.value)) set(+num.value); });
+    num.addEventListener('change', endMove);
+    num.addEventListener('blur', schedule);
+  }
+  $('weights').querySelectorAll('.wrow[data-k]').forEach(row => wire(row, v => setWeight(row.dataset.k, v)));
+  $('weights').querySelectorAll('.wrow[data-d]').forEach(row => wire(row, v => setDomain(row.dataset.d, v)));
+  document.querySelectorAll('.thr').forEach(el => wire(el, v => setZero(+el.dataset.l, v)));
+  $('weights').addEventListener('mouseover', e => {
+    const c = e.target.closest('.strip i[data-i]'); if (!c) return;
+    const i = +c.dataset.i, row = c.closest('.wrow'), k = row.dataset.k, d = row.dataset.d, sc = i >= NB ? ' · scenario' : '';
+    if (k) { const f = i < NB ? (V.flags[k] || [])[i] || '' : ''; c.title = `${mname(months[i])} · ${f2(RAMP[k][i] * W[k])} of ${fw(W[k])}${sc}${f ? ' · ' + f.replace(/;/g, ', ') : ''}`; }
+    else c.title = `${mname(months[i])} · ${f2(cur.dom[d][i])} of ${fw(domSum(d))}${sc}`;
+  });
+  $('w-undo').addEventListener('click', undo);
+  $('w-reset').addEventListener('click', reset);
+
+  // ---- scenario selector ----------------------------------------------------------------------------------------------
+  if (SCENARIOS.length) {
+    $('scen-box').hidden = false;
+    $('scen').innerHTML = '<option value="">Current</option>' + SCENARIOS.map(s => `<option value="${q(s.id)}" title="${q(s.narrative)}">${s.title}</option>`).join('');
+    $('scen').value = SCN ? SCN.id : '';
+    $('scen').addEventListener('change', () => {
+      SCN = SCENARIOS.find(s => s.id === $('scen').value) || null;
+      pinned = false; hoverIdx = null; $('tip').classList.remove('pinned'); $('tip').style.display = 'none'; $('hover-panel').style.display = 'none';
+      buildSeries(); applyThresholds(); BASELINE = baselineIndex(); renderStrips(); refresh();
+    });
+  }
+
+  // ---- refresh everything from W, the 0-point lines and the scenario -------------------------------------------------
+  let queued = false;
+  function schedule() { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; refresh(); }); } }
+  function setRow(row, val, changed) {
+    const [rng, num] = row.querySelectorAll('input');
+    rng.value = val; if (document.activeElement !== num) num.value = fw(val);
+    row.classList.toggle('changed', changed);
+  }
+  function refresh() {
+    cur = compute();
+    const def = isDefault();
+    chart.data.labels = LABELS; chart.data.datasets[0].data = cur.index; chart.data.datasets[1].data = BASELINE; chart.data.datasets[1].hidden = def; chart.update('none');
+    $('index-latest').textContent = `${mname(months[N - 1])}: ${cur.index[N - 1].toFixed(1)}`;
+    $('scen').classList.toggle('on', !!SCN);
+    document.querySelectorAll('.oc h3[data-k]').forEach(h => h.classList.toggle('hl', SKEYS.has(h.dataset.k)));
+    document.querySelectorAll('.oc-sub[data-legs]').forEach(s => s.classList.toggle('hl', s.dataset.legs.split('|').some(n => SLEGS.has(n))));
+    if (hoverIdx !== null) showTip(hoverIdx);
+    updateOutcome();
+    $('w-total').innerHTML = `Total <b>${fw(KEYS.reduce((s, k) => s + W[k], 0))}</b>`;
+    $('w-undo').disabled = !hist.length; $('w-reset').disabled = def && !hist.length;
+    $('weights').querySelectorAll('.wrow[data-k]').forEach(row => {
+      const k = row.dataset.k; setRow(row, W[k], Math.abs(W[k] - W0[k]) >= 0.005); row.classList.toggle('hl', SKEYS.has(k));
+      row.querySelectorAll('.strip i[data-i]:not(.nd)').forEach(c => { c.style.opacity = Math.max(0.07, RAMP[k][+c.dataset.i]).toFixed(2); });
+    });
+    $('weights').querySelectorAll('.wrow[data-d]').forEach(row => {
+      const d = row.dataset.d, s = domSum(d);
+      setRow(row, s, Math.abs(s - domSum(d, W0)) >= 0.005);
+      row.querySelectorAll('.strip i').forEach((c, i) => { c.style.opacity = Math.max(0.07, s > 1e-9 ? cur.dom[d][i] / s : 0).toFixed(2); });
+    });
+    writeHash();
+  }
+  refresh();
+})();
+</script>
+</body>
+</html>
