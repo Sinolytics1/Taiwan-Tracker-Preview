@@ -97,6 +97,11 @@
   .strip { display: flex; gap: 1px; height: 14px; }
   .strip i { flex: 1 1 0; min-width: 0; background: var(--c); font-style: normal; }
   .strip i.nd { background: repeating-linear-gradient(45deg, #e5e7eb 0 2px, #fff 2px 4px); }
+  /* index hover: the month's column and its key-event cells, boxed over the matrix */
+  #weights { position: relative; }
+  .mk { position: absolute; pointer-events: none; border-radius: 2px; z-index: 3; }
+  .mk.col { border: 1.5px solid var(--ink); background: rgba(15, 110, 115, 0.06); }
+  .mk.ev { border: 2px solid var(--ink); box-shadow: 0 0 0 1px #fff; }
   .wrow.mhead { border-bottom: none; padding-bottom: 0; }
   .mhead .strip i { background: none; position: relative; }
   .mhead .strip i.sc { background: var(--scen-band); }
@@ -130,7 +135,7 @@
   </div>
   <aside class="right">
     <section id="s-instruments">
-      <div class="sec-head"><span class="chev"></span><h2>3 · Instruments</h2></div>
+      <div class="sec-head"><span class="chev"></span><h2>3 · Dashboard</h2></div>
       <div class="sec-body">
         <div class="w-top">
           <span class="w-total" id="w-total"></span>
@@ -389,7 +394,7 @@
     return `<h4>${hdr}</h4>${body}`;
   }
   function showTip(i) {
-    hoverIdx = i; chart.draw();
+    hoverIdx = i; chart.draw(); markMonth(i);
     const html = tipHtml(i);
     if (touch) { $('tip').style.display = 'none'; $('hover-panel').style.display = 'block'; $('hover-panel').innerHTML = html; return; }
     const tip = $('tip'), w = tip.parentElement.clientWidth, px = chart.scales.x.getPixelForValue(i);
@@ -397,7 +402,7 @@
     tip.style.left = (px + 14 + 320 > w - 8 ? Math.max(4, px - 14 - 320) : px + 14) + 'px';
     tip.style.top = (chart.chartArea.top + 6) + 'px';
   }
-  function hideTip() { if (pinned) return; hoverIdx = null; $('tip').style.display = 'none'; chart.draw(); }
+  function hideTip() { if (pinned) return; hoverIdx = null; $('tip').style.display = 'none'; chart.draw(); markMonth(null); }
   const chart = new Chart($('c-index'), {
     type: 'line',
     data: { labels: LABELS, datasets: [
@@ -510,6 +515,20 @@
     });
   }
   renderStrips();
+  // hover on the index chart: box the month's column in the matrix and the cells of that month's key events
+  function markMonth(i) {
+    const box = $('weights'); box.querySelectorAll('.mk').forEach(e => e.remove());
+    if (i === null || i === undefined) return;
+    const head = box.querySelector(`.mhead .strip i:nth-child(${i + 1})`), col = box.querySelectorAll(`.strip i[data-i="${i}"]`);
+    if (!head || !col.length) return;
+    const b = box.getBoundingClientRect(), h = head.getBoundingClientRect(), z = col[col.length - 1].getBoundingClientRect();
+    const add = (cls, l, t, w, ht) => box.insertAdjacentHTML('beforeend', `<div class="mk ${cls}" style="left:${l - b.left}px;top:${t - b.top}px;width:${w}px;height:${ht}px"></div>`);
+    add('col', h.left - 2, h.top - 2, h.width + 4, z.bottom - h.top + 4);
+    new Set(monthEvents(months[i]).map(e => keyOf[e.row]).filter(Boolean)).forEach(k => {
+      const c = box.querySelector(`.wrow[data-k="${k}"] .strip i[data-i="${i}"]`); if (!c) return;
+      const r = c.getBoundingClientRect(); add('ev', r.left - 3, r.top - 3, r.width + 6, r.height + 6);
+    });
+  }
   function wire(el, set) {
     const [rng, num] = el.querySelectorAll('input');
     rng.addEventListener('input', () => set(+rng.value));
@@ -537,7 +556,7 @@
     $('scen').value = SCN ? SCN.id : '';
     $('scen').addEventListener('change', () => {
       SCN = SCENARIOS.find(s => s.id === $('scen').value) || null;
-      pinned = false; hoverIdx = null; $('tip').classList.remove('pinned'); $('tip').style.display = 'none'; $('hover-panel').style.display = 'none';
+      pinned = false; hoverIdx = null; $('tip').classList.remove('pinned'); $('tip').style.display = 'none'; $('hover-panel').style.display = 'none'; markMonth(null);
       buildSeries(); applyThresholds(); BASELINE = baselineIndex(); renderStrips(); refresh();
     });
   }
