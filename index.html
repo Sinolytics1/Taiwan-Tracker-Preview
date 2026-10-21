@@ -57,6 +57,8 @@
   .tip .ev { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; }
   .tip .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
   .tip .pts { color: var(--teal); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+  .tip a.src { color: var(--teal); font-family: var(--mono); font-size: 11px; white-space: nowrap; text-decoration: none; }
+  .tip a.src:hover { text-decoration: underline; }
   .tip .day { color: var(--ink-soft); font-family: var(--mono); font-size: 11px; white-space: nowrap; margin-left: auto; padding-left: 6px; }
   .tip .none { color: var(--ink-soft); font-style: italic; }
   #hover-panel { display: none; margin-top: 10px; border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 12px; }
@@ -389,7 +391,7 @@
     const hdr = `${mname(m)} · ${I[i].toFixed(1)}${i ? ` (${d >= 0 ? '+' : ''}${d.toFixed(1)} vs ${MN[+months[i - 1].slice(5, 7) - 1]})` : ''}${i >= NB ? ' · scenario' : ''}`;
     const evs = monthEvents(m).slice().reverse();   // top of the dot stack first
     const body = evs.length ? evs.map(x => { const p = evPts(x);
-      return `<div class="ev"><span class="dot" style="background:${DOM[x.domain]}"></span><span>${x.headline}${p > 0 ? ` <span class="pts">+${f2(p)} ${x.row}</span>` : ''}</span><span class="day">${x.day}</span></div>`; }).join('')
+      return `<div class="ev"><span class="dot" style="background:${DOM[x.domain]}"></span><span>${x.headline}${p > 0 ? ` <span class="pts">+${f2(p)} ${x.row}</span>` : ''}${x.url ? ` <a class="src" href="${q(x.url)}" target="_blank" rel="noopener">${x.source || 'source'} ↗</a>` : ''}</span><span class="day">${x.day}</span></div>`; }).join('')
       : '<div class="none">No scored events this month</div>';
     return `<h4>${hdr}</h4>${body}`;
   }
