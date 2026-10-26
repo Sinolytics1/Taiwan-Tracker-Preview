@@ -51,6 +51,15 @@
   .legend-dots span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 4px; }
   .chart-wrap { position: relative; height: 380px; }
   .chart-wrap canvas { width: 100% !important; }
+  /* range bar under the index chart */
+  .range { position: relative; height: 36px; margin-top: 8px; border: 1px solid var(--rule); border-radius: var(--radius); user-select: none; touch-action: none; cursor: pointer; }
+  .range .rc { position: absolute; inset: 0; }
+  .range .out { position: absolute; top: 0; bottom: 0; background: rgba(248, 250, 252, 0.8); }
+  .range .out.l { left: 0; } .range .out.r { right: 0; }
+  .range .win { position: absolute; top: -1px; bottom: -1px; border: 1.5px solid var(--teal); border-radius: 3px; cursor: grab; }
+  .range .hd { position: absolute; top: 50%; width: 8px; height: 20px; margin-top: -10px; background: #fff; border: 1.5px solid var(--teal); border-radius: 3px; cursor: ew-resize; }
+  .range .hd.l { left: -5px; } .range .hd.r { right: -5px; }
+  .range-lab { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); margin-top: 3px; }
   .tip { position: absolute; width: 320px; background: #fff; border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: 0 4px 16px rgba(0,0,0,.08); padding: 10px 12px; font-size: 12.5px; pointer-events: auto; display: none; z-index: 5; }
   .tip.pinned { border-color: var(--teal); }
   .tip h4 { margin: 0 0 6px; font-family: var(--mono); font-size: 12px; font-weight: 600; }
@@ -126,6 +135,8 @@
       <div class="sec-body">
         <div class="legend-dots" id="legend-dots"></div>
         <div class="chart-wrap"><canvas id="c-index"></canvas><div class="tip" id="tip"></div></div>
+        <div class="range" id="range" title="Drag the handles or the window; double-click for all months"><div class="rc"><canvas id="c-range"></canvas></div><div class="out l"></div><div class="out r"></div><div class="win"><span class="hd l"></span><span class="hd r"></span></div></div>
+        <div class="range-lab"><span id="r-from"></span><span id="r-to"></span></div>
         <div id="hover-panel"></div>
         <div class="takeaways" id="takeaways-box" hidden><h3>Key takeaways</h3><div id="takeaways"></div></div>
       </div>
@@ -326,10 +337,13 @@
   function restore(s) { W = Object.assign({}, s.w); LEGS.forEach((l, i) => { l.z = s.z[i]; }); applyThresholds(); }
   function undo() { if (!hist.length) return; snap = null; restore(hist.pop()); refresh(); }
   function reset() { snap = null; hist.length = 0; restore({ w: W0, z: LEGS.map(l => l.zero) }); refresh(); }
-  // scenario, weights and 0-point lines in the address (#s=...&w=...&z=...) so a setting can be bookmarked or sent
+  // scenario, weights, 0-point lines and month range in the address (#s=...&w=...&z=...&r=...) so a setting can be
+  // bookmarked or sent
+  let RANGE_HASH = null;
   function readHash() {
     const p = new URLSearchParams(location.hash.slice(1));
     SCN = SCENARIOS.find(s => s.id === p.get('s')) || null;
+    RANGE_HASH = p.get('r');
     const w = (p.get('w') || '').split(',').map(Number);
     if (w.length === KEYS.length && w.every(x => isFinite(x) && x >= 0)) {
       const s = w.reduce((a, b) => a + b, 0); if (s > 0) KEYS.forEach((k, i) => { W[k] = w[i] * TOTAL / s; });
@@ -342,6 +356,7 @@
     if (SCN) h.push('s=' + SCN.id);
     if (!sameW(W, W0)) h.push('w=' + KEYS.map(k => +W[k].toFixed(3)).join(','));
     if (!zDefault()) h.push('z=' + LEGS.map(l => fz(l.z)).join(','));
+    if (R.lo > 0 || R.hi < N - 1) h.push('r=' + months[R.lo] + '_' + months[R.hi]);
     try { history.replaceState(null, '', h.length ? '#' + h.join('&') : location.pathname + location.search); } catch (e) {}
   }
   readHash();
@@ -357,8 +372,8 @@
 
   // shaded band over the scenario months, on the index and outcome charts
   const bandPlugin = { id: 'scenBand', beforeDatasetsDraw(ch) {
-    if (N <= NB) return;
-    const { ctx, chartArea: a, scales: { x } } = ch, x0 = (x.getPixelForValue(NB - 1) + x.getPixelForValue(NB)) / 2;
+    if (N <= NB || (ch.options.scales.x.max ?? N - 1) < NB) return;
+    const { ctx, chartArea: a, scales: { x } } = ch, x0 = Math.max(a.left, (x.getPixelForValue(NB - 1) + x.getPixelForValue(NB)) / 2);
     ctx.save(); ctx.fillStyle = css('--scen-band'); ctx.fillRect(x0, a.top, a.right - x0, a.bottom - a.top);
     ctx.fillStyle = css('--ink-soft'); ctx.font = '10px ' + css('--mono'); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     if (a.right - x0 > 60) ctx.fillText('scenario', x0 + 3, a.top + 3);
@@ -405,6 +420,11 @@
     tip.style.top = (chart.chartArea.top + 6) + 'px';
   }
   function hideTip() { if (pinned) return; hoverIdx = null; $('tip').style.display = 'none'; chart.draw(); markMonth(null); }
+  // keep the range bar under the x axis of the index chart (same left and right edge as the plot area)
+  const alignPlugin = { id: 'alignRange', afterLayout(ch) {
+    const a = ch.chartArea; if (!a) return;
+    [$('range'), document.querySelector('.range-lab')].forEach(el => { el.style.marginLeft = a.left + 'px'; el.style.width = (a.right - a.left) + 'px'; });
+  } };
   const chart = new Chart($('c-index'), {
     type: 'line',
     data: { labels: LABELS, datasets: [
@@ -416,7 +436,7 @@
                 x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12, font: tickFont } } },
       plugins: { legend: { display: false }, tooltip: { enabled: false, external: ctx => { if (pinned) return; const t = ctx.tooltip; if (!t || t.opacity === 0 || !t.dataPoints || !t.dataPoints.length) { hideTip(); return; } showTip(t.dataPoints[0].dataIndex); } } },
       onClick: (e, els) => { if (els.length) { if (pinned && hoverIdx === els[0].index) { pinned = false; $('tip').classList.remove('pinned'); hideTip(); } else { pinned = true; showTip(els[0].index); $('tip').classList.add('pinned'); } } } },
-    plugins: [bandPlugin, hoverPlugin],
+    plugins: [bandPlugin, hoverPlugin, alignPlugin],
   });
   $('c-index').addEventListener('touchstart', () => { touch = true; }, { passive: true });
   $('c-index').addEventListener('mouseleave', hideTip);
@@ -484,6 +504,41 @@
       el.classList.toggle('changed', Math.abs(l.z - l.zero) > 1e-9);
     });
   }
+
+  // ---- range bar under the index chart: drag a handle to move one end, drag the window to pan, click outside it to
+  // jump, double-click for all months; the index and outcome charts show only the chosen months ------------------------
+  const MIN_SPAN = 5;   // at least six months shown
+  let R = { lo: 0, hi: N - 1 };
+  if (RANGE_HASH) { const [a, b] = RANGE_HASH.split('_').map(m => months.indexOf(m)); if (a >= 0 && b - a >= MIN_SPAN) R = { lo: a, hi: b }; }
+  const mini = new Chart($('c-range'), { type: 'line',
+    data: { labels: LABELS, datasets: [{ data: cur.index, borderColor: css('--teal'), backgroundColor: css('--teal-fill'), fill: true, borderWidth: 1, pointRadius: 0, tension: 0.2 }] },
+    options: { maintainAspectRatio: false, animation: false, events: [], layout: { padding: 0 },
+      scales: { x: { display: false }, y: { display: false, min: 0, max: 100 } }, plugins: { legend: { display: false }, tooltip: { enabled: false } } } });
+  function applyRange() { [chart, ...OCH.map(o => o.ch)].forEach(ch => { ch.options.scales.x.min = R.lo; ch.options.scales.x.max = R.hi; }); }
+  function placeRange() {
+    const span = Math.max(1, N - 1), l = 100 * R.lo / span, r = 100 * R.hi / span, el = $('range');
+    el.querySelector('.win').style.left = l + '%'; el.querySelector('.win').style.width = (r - l) + '%';
+    el.querySelector('.out.l').style.width = l + '%'; el.querySelector('.out.r').style.width = (100 - r) + '%';
+    $('r-from').textContent = mname(months[R.lo]); $('r-to').textContent = mname(months[R.hi]);
+  }
+  let drag = null;
+  $('range').addEventListener('pointerdown', e => {
+    const el = $('range'), rect = el.getBoundingClientRect(), t = e.target;
+    const at = x => Math.round(Math.max(0, Math.min(1, (x - rect.left) / rect.width)) * (N - 1));
+    const mode = t.classList.contains('hd') ? (t.classList.contains('l') ? 'l' : 'r') : 'move';
+    if (!t.closest('.win')) { const w = R.hi - R.lo; R.lo = Math.max(0, Math.min(N - 1 - w, at(e.clientX) - Math.round(w / 2))); R.hi = R.lo + w; schedule(); }
+    drag = { mode, x0: e.clientX, lo: R.lo, hi: R.hi, at, per: (N - 1) / rect.width };
+    el.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  $('range').addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (drag.mode === 'l') R.lo = Math.max(0, Math.min(drag.at(e.clientX), R.hi - MIN_SPAN));
+    else if (drag.mode === 'r') R.hi = Math.min(N - 1, Math.max(drag.at(e.clientX), R.lo + MIN_SPAN));
+    else { const w = drag.hi - drag.lo; R.lo = Math.max(0, Math.min(N - 1 - w, drag.lo + Math.round((e.clientX - drag.x0) * drag.per))); R.hi = R.lo + w; }
+    schedule();
+  });
+  ['pointerup', 'pointercancel'].forEach(t => $('range').addEventListener(t, () => { drag = null; }));
+  $('range').addEventListener('dblclick', () => { R = { lo: 0, hi: N - 1 }; schedule(); });
 
   // ---- 3. weights and monthly matrix (shade = points / weight) ----------------------------------------------------------
   // short data-source labels; the full source text from the registry is on hover
@@ -559,7 +614,10 @@
     $('scen').addEventListener('change', () => {
       SCN = SCENARIOS.find(s => s.id === $('scen').value) || null;
       pinned = false; hoverIdx = null; $('tip').classList.remove('pinned'); $('tip').style.display = 'none'; $('hover-panel').style.display = 'none'; markMonth(null);
-      buildSeries(); applyThresholds(); BASELINE = baselineIndex(); renderStrips(); refresh();
+      const atEnd = R.hi === N - 1;
+      buildSeries(); applyThresholds(); BASELINE = baselineIndex();
+      R.hi = atEnd ? N - 1 : Math.min(R.hi, N - 1); R.lo = Math.max(0, Math.min(R.lo, R.hi - MIN_SPAN));
+      renderStrips(); refresh();
     });
   }
 
@@ -572,7 +630,7 @@
     row.classList.toggle('changed', changed);
   }
   function refresh() {
-    cur = compute();
+    cur = compute(); applyRange();
     const def = isDefault();
     chart.data.labels = LABELS; chart.data.datasets[0].data = cur.index; chart.data.datasets[1].data = BASELINE; chart.data.datasets[1].hidden = def; chart.update('none');
     $('index-latest').textContent = `${mname(months[N - 1])}: ${cur.index[N - 1].toFixed(1)}`;
@@ -581,6 +639,7 @@
     document.querySelectorAll('.oc-sub[data-legs]').forEach(s => s.classList.toggle('hl', s.dataset.legs.split('|').some(n => SLEGS.has(n))));
     if (hoverIdx !== null) showTip(hoverIdx);
     updateOutcome();
+    mini.data.labels = LABELS; mini.data.datasets[0].data = cur.index; mini.update('none'); placeRange();
     $('w-total').innerHTML = `Total <b>${fw(KEYS.reduce((s, k) => s + W[k], 0))}</b>`;
     $('w-undo').disabled = !hist.length; $('w-reset').disabled = def && !hist.length;
     $('weights').querySelectorAll('.wrow[data-k]').forEach(row => {
