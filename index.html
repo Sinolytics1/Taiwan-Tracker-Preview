@@ -101,6 +101,13 @@
   .wrow .code { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
   .wrow .lab { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
   .wrow .src { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+  /* indicator hover: code and name, then what the row measures and how it scores */
+  .ihover { position: absolute; display: none; width: min(860px, calc(100vw - 32px)); background: #fff; border: 1px solid var(--rule); border-radius: var(--radius); box-shadow: 0 4px 16px rgba(0,0,0,.08); padding: 8px 12px; font-size: 12.5px; pointer-events: none; z-index: 10; }
+  .ihover h4 { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; }
+  .ihover h4 .code { font-family: var(--mono); color: var(--ink-soft); margin-right: 8px; }
+  .ihover dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; }
+  .ihover dt { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); line-height: 18px; }
+  .ihover dd { margin: 0; line-height: 18px; }
   .wrow.dom { background: var(--panel); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin-top: 10px; padding: 5px 0; }
   .wrow.dom .code { font-weight: 700; font-size: 12px; text-align: center; }
   .wrow.dom .lab { font-weight: 600; }
@@ -164,6 +171,7 @@
   <span id="foot-version"></span>
   <span id="foot-built"></span>
 </footer>
+<div class="ihover" id="ihover" role="tooltip"></div>
 <script src="data.js"></script>
 <script src="scenarios.js"></script>
 <script>
@@ -558,7 +566,7 @@
       <div class="strip" style="--c:${DOM[d]}"></div></div>`;
     INS.filter(r => r.domain === d).forEach(r => {
       const k = r.key;
-      wh += `<div class="wrow" data-k="${k}"><span class="code">${codes[k]}</span><div class="lab" title="${q(r.label)}&#10;${q(r.rule)}"><span>${r.label}</span></div><span class="src" title="${q(r.source)}">${SRC[k] || r.source_type || ''}</span>
+      wh += `<div class="wrow" data-k="${k}"><span class="code">${codes[k]}</span><div class="lab" tabindex="0" aria-describedby="ihover"><span>${r.label}</span></div><span class="src" title="${q(r.source)}">${SRC[k] || r.source_type || ''}</span>
         <input type="range" min="0" max="25" step="0.1" aria-label="${q(r.label)} weight"><input type="number" min="0" max="${TOTAL}" step="0.01" aria-label="${q(r.label)} weight value">
         <div class="strip" style="--c:${DOM[d]}"></div></div>`;
     });
@@ -605,6 +613,29 @@
     if (k) { const f = i < NB ? (V.flags[k] || [])[i] || '' : ''; c.title = `${mname(months[i])} · ${f2(RAMP[k][i] * W[k])} of ${fw(W[k])}${sc}${f ? ' · ' + f.replace(/;/g, ', ') : ''}`; }
     else c.title = `${mname(months[i])} · ${f2(cur.dom[d][i])} of ${fw(domSum(d))}${sc}`;
   });
+  // indicator hover (registry hover_measures / hover_scoring): on pointer entry, keyboard focus or a tap; placed below
+  // the row, or above it near the bottom of the window, so the row's cells stay visible
+  const esc = s => String(s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const IH = $('ihover'); let ihLab = null;
+  function showInd(lab) {
+    const row = lab.closest('.wrow'), r = INS.find(x => x.key === row.dataset.k);
+    IH.innerHTML = `<h4><span class="code">${codes[r.key]}</span>${esc(r.label)}</h4>
+      <dl><dt>Measures</dt><dd>${esc(r.hover_measures)}</dd><dt>Scoring</dt><dd>${esc(r.hover_scoring)}</dd></dl>`;
+    IH.style.display = 'block'; ihLab = lab;
+    const b = row.getBoundingClientRect(), w = IH.offsetWidth, h = IH.offsetHeight, vw = document.documentElement.clientWidth;
+    const below = b.bottom + 4 + h <= innerHeight - 8 || b.top - 4 - h < 8;
+    IH.style.left = (Math.max(16, Math.min(b.left, vw - 16 - w)) + scrollX) + 'px';
+    IH.style.top = ((below ? b.bottom + 4 : b.top - 4 - h) + scrollY) + 'px';
+  }
+  function hideInd(lab) { if (!lab || lab === ihLab) { IH.style.display = 'none'; ihLab = null; } }
+  const labOf = e => e.target.closest && e.target.closest('.wrow[data-k] .lab');
+  $('weights').addEventListener('pointerover', e => { const l = labOf(e); if (l && e.pointerType !== 'touch') showInd(l); });
+  $('weights').addEventListener('pointerout', e => { const l = labOf(e); if (l && e.pointerType !== 'touch' && !l.contains(e.relatedTarget)) hideInd(l); });
+  $('weights').addEventListener('focusin', e => { const l = labOf(e); if (l) showInd(l); });
+  $('weights').addEventListener('focusout', e => { const l = labOf(e); if (l) hideInd(l); });
+  $('weights').addEventListener('click', e => { const l = labOf(e); if (l) showInd(l); });
+  document.addEventListener('pointerdown', e => { if (ihLab && !labOf(e)) hideInd(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideInd(); });
   $('w-undo').addEventListener('click', undo);
   $('w-reset').addEventListener('click', reset);
 
